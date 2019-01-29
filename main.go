@@ -1,48 +1,83 @@
 package main
 
 import (
-	"github.com/Syfaro/telegram-bot-api"
+	"encoding/json"
+	"fmt"
+	"github.com/go-telegram-bot-api/telegram-bot-api"
+	"io/ioutil"
 	"log"
+	"net/http"
 )
 
-func main() {
-	// подключаемся к боту с помощью токена
-	bot, err := tgbotapi.NewBotAPI("744595298:AAELmkW03wYJobHCkSePPHWcNqG6gEZVlSc")
+const TGAPI = "..."
+const OpenWeatherAPI = "..."
+
+func weatherAnswer(lat float64, lon float64) string {
+	client := http.Client{}
+	WeatherApi := fmt.Sprint("http://api.openweathermap.org/data/2.5/weather?lat=", lat, "&lon=", lon, "&units=metric&APPID=", OpenWeatherAPI)
+
+	WeatherResponse, err := client.Get(WeatherApi)
 	if err != nil {
-		log.Panic(err)
+		//log.Println(err)
+		return "Не удалось считать данные"
+	}
+
+	DateWeather, err := ioutil.ReadAll(WeatherResponse.Body)
+	if err != nil {
+		log.Println(err)
+	}
+
+	type OWMResponse struct {
+		Main struct {
+			Temp float64
+		}
+		Name string
+	}
+	var WeatherMessageGet OWMResponse
+
+	err = json.Unmarshal(DateWeather, &WeatherMessageGet)
+	if err != nil {
+		log.Println(err)
+	}
+
+	if WeatherMessageGet.Name == "" {
+		WeatherMessageGet.Name = "Unknown"
+	}
+
+	return fmt.Sprint("Ваш город - ", WeatherMessageGet.Name, "\n Температура ", WeatherMessageGet.Main.Temp)
+}
+
+func main() {
+	bot, err := tgbotapi.NewBotAPI(TGAPI)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	bot.Debug = true
+
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
-	// инициализируем канал, куда будут прилетать обновления от API
-	var ucfg tgbotapi.UpdateConfig = tgbotapi.NewUpdate(0)
-	ucfg.Timeout = 60
-	err = bot.UpdatesChan(ucfg)
-	// читаем обновления из канала
-	for {
-		select {
-		case update := <-bot.Updates:
-			// Пользователь, который написал боту
-			UserName := update.Message.From.UserName
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
 
-			// ID чата/диалога.
-			// Может быть идентификатором как чата с пользователем
-			// (тогда он равен UserID) так и публичного чата/канала
-			ChatID := update.Message.Chat.ID
+	updates, err := bot.GetUpdatesChan(u)
 
-			// Текст сообщения
-			Text := update.Message.Text
-
-			log.Printf("[%s] %d %s", UserName, ChatID, Text)
-
-			// Ответим пользователю его же сообщением
-			reply := Text
-			// Созадаем сообщение
-			msg := tgbotapi.NewMessage(ChatID, reply)
-			// и отправляем его
-			bot.SendMessage(msg)
+	for update := range updates {
+		if update.Message == nil { // ignore any non-Message Updates
+			continue
 		}
 
+		reply := "Не знаю что сказать"
+
+		if update.Message.Location != nil {
+			//log.Println(update.Message.Location)
+			reply = weatherAnswer(update.Message.Location.Latitude, update.Message.Location.Longitude)
+		}
+
+		//log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, reply)
+		msg.ReplyToMessageID = update.Message.MessageID
+
+		bot.Send(msg)
 	}
 }
