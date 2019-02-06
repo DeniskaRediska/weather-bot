@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/DeniskaRediska/weather-bot/controller"
 	"github.com/go-telegram-bot-api/telegram-bot-api"
 	"io/ioutil"
 	"log"
@@ -62,12 +63,16 @@ func main() {
 
 	updates, err := bot.GetUpdatesChan(u)
 
+	botController := controller.BotController{Bot: bot}
+	botController.When(isStart, handleStart)
 	for update := range updates {
-		if update.Message == nil { // ignore any non-Message Updates
+		/*if update.Message == nil { // ignore any non-Message Updates
 			continue
-		}
+		}*/
 
-		reply := "Не знаю что сказать"
+		botController.HandleUpdate(update)
+
+		/*reply := "Не знаю что сказать"
 
 		if update.Message.Location != nil {
 			//log.Println(update.Message.Location)
@@ -78,6 +83,18 @@ func main() {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, reply)
 		msg.ReplyToMessageID = update.Message.MessageID
 
-		bot.Send(msg)
+		bot.Send(msg)*/
+	}
+}
+
+func isStart(update tgbotapi.Update) bool {
+	isStart := update.Message != nil && update.Message.Text == "/start"
+	return isStart
+}
+
+func handleStart(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+	message := tgbotapi.NewMessage(update.Message.Chat.ID, "Hello world")
+	if _, err := bot.Send(message); err != nil {
+		log.Println(err)
 	}
 }
