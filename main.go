@@ -9,8 +9,8 @@ import (
 	"net/http"
 )
 
-const TGAPI = "..."
-const OpenWeatherAPI = "..."
+const TGAPI = "744595298:AAELmkW03wYJobHCkSePPHWcNqG6gEZVlSc"
+const OpenWeatherAPI = "23c6fd16f52d2bbd5edc293bfab7681a"
 
 func weatherAnswer(lat float64, lon float64) string {
 	client := http.Client{}
