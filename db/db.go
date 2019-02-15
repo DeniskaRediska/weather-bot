@@ -8,11 +8,9 @@ import (
 	"log"
 )
 
-func init() {
-
-}
-
 const dataSource = ""
+
+var db *sqlx.DB
 
 type SettingBot struct {
 	ID           int
@@ -20,6 +18,12 @@ type SettingBot struct {
 	Lon          float64
 	Notification bool
 	Time         string
+}
+
+func GetEnableSettingsDB() ([]SettingBot, error) {
+	getAllStuct := []SettingBot{}
+	err := db.Select(&getAllStuct, "SELECT * FROM setting WHERE notification = true")
+	return getAllStuct, err
 }
 
 func GetSettingById(userID int) (*SettingBot, error) {
@@ -57,8 +61,6 @@ func UpdateSetting(setting SettingBot) (*SettingBot, error) {
 	)
 	return &setting, err
 }
-
-var db *sqlx.DB
 
 func InitDB() {
 	newDb, err := sqlx.Open("mysql", dataSource)
