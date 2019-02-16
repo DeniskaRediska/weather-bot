@@ -23,10 +23,15 @@ var (
 
 	awaitLocation = make(map[int]bool)
 	awaitTime     = make(map[int]bool)
+
+	cancelKeyboard = tgbotapi.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
+			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
+		},
+	}
 )
 
 func main() {
-
 	db.InitDB()
 	schedule.LoadNotificationsTasks()
 
@@ -38,11 +43,6 @@ func main() {
 	bot.Debug = true
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
-
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates, err := bot.GetUpdatesChan(u)
 
 	botController := controller.BotController{Bot: bot}
 	botController.When(isAwaitLocationYes, handleAwaitYes)
@@ -56,334 +56,321 @@ func main() {
 	botController.When(isNotifSetting, handleNotifPush)
 	botController.When(isTimeSetting, handleTimeSetting)
 
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+	updates, err := bot.GetUpdatesChan(u)
 	for update := range updates {
 		botController.HandleUpdate(update)
 	}
 }
 
-func fineToCreateDB(update tgbotapi.Update) {
-	var id int
-	if update.Message != nil {
-		id = update.Message.From.ID
-	}
-	if update.CallbackQuery != nil {
-		id = update.CallbackQuery.From.ID
-	}
-	userStruct, err := db.GetSettingById(id)
+func findOrCreateSetting(id int) (*db.SettingBot, error) {
+	settings, err := db.GetSettingById(id)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	if userStruct == nil {
-		userStruct = &db.SettingBot{
+	if settings == nil {
+		settings = &db.SettingBot{
 			ID:           id,
 			Lon:          0.0,
 			Lat:          0.0,
 			Notification: false,
 			Time:         "9:00",
 		}
-		_, err := db.InsertSetting(*userStruct)
+		_, err := db.InsertSetting(*settings)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
+	return settings, nil
+}
+
+func createMainKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
+			{{Text: "Погода в данный момент", CallbackData: &callBackWeatherRightNow}},
+			{{Text: "Настройка уведомлений", CallbackData: &callBackWeatherNotification}},
+			{{Text: "Задать локацию", CallbackData: &callBackWeatherLocation}},
+		},
+	}
+}
+
+func createSecondSettingKeyboard(setting *db.SettingBot) tgbotapi.InlineKeyboardMarkup {
+	msg := "уведомляшки"
+	if setting.Notification {
+		msg = "отключить уведомления"
+	} else {
+		msg = "включить уведомления"
+	}
+	return tgbotapi.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
+			{{Text: msg, CallbackData: &callBackWeatherNotifPush}},
+			{{Text: "Установить время", CallbackData: &callBackWeatherNotifTime}},
+			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
+		},
+	}
+}
+
+func getSettingInfo(setting *db.SettingBot) string {
+	msg := "Настройка уведомлений"
+	if setting.Notification {
+		msg = fmt.Sprintln(msg, "\nУведомления включены")
+	} else {
+		msg = fmt.Sprintln(msg, "\nУведомления отключены")
+	}
+	msg = fmt.Sprintf("%sТекущее время: %s", msg, setting.Time)
+	return msg
+}
+
+func updateMessageBot(bot *tgbotapi.BotAPI, chatId int64, msgId int, textMsg string, keyboard *tgbotapi.InlineKeyboardMarkup) error {
+	if keyboard != nil && textMsg == "" {
+		message := tgbotapi.NewEditMessageReplyMarkup(chatId, msgId, *keyboard)
+		if _, err := bot.Send(message); err != nil {
+			return err
+		}
+	}
+	if textMsg != "" {
+		editText := tgbotapi.NewEditMessageText(chatId, msgId, textMsg)
+		editText.ReplyMarkup = keyboard
+		if _, err := bot.Send(editText); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isStart(update tgbotapi.Update) bool {
 	isStart := update.Message != nil && update.Message.Text == "/start"
 	return isStart
 }
-func handleStart(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+func handleStart(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
-	fineToCreateDB(update)
+	_, err := findOrCreateSetting(update.Message.From.ID)
+	if err != nil {
+		return err
+	}
 
 	message := tgbotapi.NewMessage(update.Message.Chat.ID, "Привет, я погодный бот")
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Погода в данный момент", CallbackData: &callBackWeatherRightNow}},
-			{{Text: "Настройка уведомлений", CallbackData: &callBackWeatherNotification}},
-			{{Text: "Задать локацию", CallbackData: &callBackWeatherLocation}},
-		},
-	}
+	message.ReplyMarkup = createMainKeyboard()
 	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
+	return nil
 }
 
+//
 func isLocationButton(update tgbotapi.Update) bool {
 	isLocationButton := update.CallbackQuery != nil && update.CallbackQuery.Data == callBackWeatherLocation
 	return isLocationButton
 }
-func handleLocation(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+func handleLocation(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Пожалуйста, отправьте мне свою локацию\n\"Прикрепить\"->\"Location\"")
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-		},
-	}
+	message.ReplyMarkup = cancelKeyboard
 	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
 	awaitLocation[update.CallbackQuery.From.ID] = true
+	return nil
 }
 
+//
 func isAwaitLocationYes(update tgbotapi.Update) bool {
 	isAwaitLocation := update.Message != nil && awaitLocation[update.Message.From.ID] == true && update.Message.Location != nil
 	return isAwaitLocation
 }
-func handleAwaitYes(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
-
-	fineToCreateDB(update)
-
-	dbPointUserS, err := db.GetSettingById(update.Message.From.ID)
+func handleAwaitYes(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
+	setting, err := findOrCreateSetting(update.Message.From.ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	dbPointUserS.Lon = update.Message.Location.Longitude
-	dbPointUserS.Lat = update.Message.Location.Latitude
-	_, err = db.UpdateSetting(*dbPointUserS)
+	setting.Lon = update.Message.Location.Longitude
+	setting.Lat = update.Message.Location.Latitude
+	_, err = db.UpdateSetting(*setting)
 	if err != nil {
-		panic(err)
-	}
-	message := tgbotapi.NewMessage(update.Message.Chat.ID, "Локация успешно задана")
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Погода в данный момент", CallbackData: &callBackWeatherRightNow}},
-			{{Text: "Настройка уведомлений", CallbackData: &callBackWeatherNotification}},
-			{{Text: "Задать локацию", CallbackData: &callBackWeatherLocation}},
-		},
-	}
-	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
 	awaitLocation[update.Message.From.ID] = false
+
+	message := tgbotapi.NewMessage(update.Message.Chat.ID, "Локация успешно задана")
+	message.ReplyMarkup = createMainKeyboard()
+	if _, err := bot.Send(message); err != nil {
+		return err
+	}
+	return nil
 }
 
+//
 func isAwaitLocationNo(update tgbotapi.Update) bool {
 	isAwaitLocation := update.Message != nil && awaitLocation[update.Message.From.ID] == true && update.Message.Location == nil
 	return isAwaitLocation
 }
-func handleAwaitNo(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+func handleAwaitNo(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	message := tgbotapi.NewMessage(update.Message.Chat.ID, "Пожалуйста, отправьте мне локацию\n\"Прикрепить\"->\"Location\"")
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-		},
-	}
+	message.ReplyMarkup = cancelKeyboard
 	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
+	return nil
 }
 
+//
 func isToMenuButton(update tgbotapi.Update) bool {
 	backToMenu := update.CallbackQuery != nil && update.CallbackQuery.Data == callBackWeatherMenu
 	return backToMenu
 }
-func backToMenu(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
-
+func backToMenu(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	awaitTime[update.CallbackQuery.From.ID] = false
 	awaitLocation[update.CallbackQuery.From.ID] = false
 
 	message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Отмена. Возврат в меню")
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Погода в данный момент", CallbackData: &callBackWeatherRightNow}},
-			{{Text: "Настройка уведомлений", CallbackData: &callBackWeatherNotification}},
-			{{Text: "Задать локацию", CallbackData: &callBackWeatherLocation}},
-		},
-	}
+	message.ReplyMarkup = createMainKeyboard()
 	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
+	return nil
 }
 
+//
 func isTempRightNowButton(update tgbotapi.Update) bool {
 	TempRightNow := update.CallbackQuery != nil && update.CallbackQuery.Data == callBackWeatherRightNow
 	return TempRightNow
 }
-func handleTempRightNow(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
-
-	fineToCreateDB(update)
-
-	UserStruct, err := db.GetSettingById(update.CallbackQuery.From.ID)
+func handleTempRightNow(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
+	setting, err := findOrCreateSetting(update.CallbackQuery.From.ID)
 	if err != nil {
-		log.Println(err, "не удалось считать выполнить запрос в базу данных")
-		return
+		return err
 	}
 
-	if UserStruct.Lat == 0 && UserStruct.Lon == 0 {
+	if setting.Lat == 0 && setting.Lon == 0 {
 		message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Пожалуйста, отправьте мне свою локацию\n\"Прикрепить\"->\"Location\"")
-		message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-			InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-				{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-			},
-		}
+		message.ReplyMarkup = cancelKeyboard
 		if _, err := bot.Send(message); err != nil {
-			log.Println(err)
+			return err
 		}
 		awaitLocation[update.CallbackQuery.From.ID] = true
-		return
 	} else {
-		cityName, temp, err := openweather.WeatherAnswer(UserStruct.Lat, UserStruct.Lon)
+		cityName, temp, err := openweather.GetCurrentWeather(setting.Lat, setting.Lon)
 		if err != nil {
-			log.Println(err, "Не удалось получить ответ от OpenWeather")
-			return
+			return err
 		}
 		msg := fmt.Sprintln("Ваш город - ", cityName, "\nТемпература - ", temp)
 		message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, msg)
-		message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-			InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-				{{Text: "Погода в данный момент", CallbackData: &callBackWeatherRightNow}},
-				{{Text: "Настройка уведомлений", CallbackData: &callBackWeatherNotification}},
-				{{Text: "Задать локацию", CallbackData: &callBackWeatherLocation}},
-			},
-		}
+		message.ReplyMarkup = createMainKeyboard()
 		if _, err := bot.Send(message); err != nil {
-			log.Println(err)
+			return err
 		}
 	}
-
+	return nil
 }
 
+//
 func isNotificationButton(update tgbotapi.Update) bool {
 	isNotificationButton := update.CallbackQuery != nil && update.CallbackQuery.Data == callBackWeatherNotification
 	return isNotificationButton
 }
-func handleNotificationButton(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
-
-	fineToCreateDB(update)
-
-	userInfo, err := db.GetSettingById(update.CallbackQuery.From.ID)
+func handleNotificationButton(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
+	setting, err := findOrCreateSetting(update.CallbackQuery.From.ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	msg := "Настройка уведомлений"
-	if userInfo.Notification {
-		msg = fmt.Sprintln(msg, "\nУведомления включены")
-	} else {
-		msg = fmt.Sprintln(msg, "\nУведомления отключены")
-	}
-	msg = fmt.Sprintln(msg, "Текущее время: ", userInfo.Time)
+	msg := getSettingInfo(setting)
 	message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, msg)
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Получать уведомления", CallbackData: &callBackWeatherNotifPush}},
-			{{Text: "Установить время", CallbackData: &callBackWeatherNotifTime}},
-			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-		},
-	}
+	message.ReplyMarkup = createSecondSettingKeyboard(setting)
 	if _, err := bot.Send(message); err != nil {
 		log.Println(err)
 	}
-
+	return nil
 }
 
+//
 func isNotifSetting(update tgbotapi.Update) bool {
 	isNotif := update.CallbackQuery != nil && update.CallbackQuery.Data == callBackWeatherNotifPush
 	return isNotif
 }
-func handleNotifPush(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
-	userInfo, err := db.GetSettingById(update.CallbackQuery.From.ID)
+func handleNotifPush(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
+	setting, err := findOrCreateSetting(update.CallbackQuery.From.ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	var msg string
-	if userInfo.Notification {
-		userInfo.Notification = false
-		_, err = db.UpdateSetting(*userInfo)
+	if setting.Notification {
+		setting.Notification = false
+		_, err = db.UpdateSetting(*setting)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		schedule.DeleteNotificationsTask(userInfo.ID)
+		schedule.DeleteNotificationsTask(setting.ID)
 		msg = fmt.Sprintln("Уведомления были отключены")
 	} else {
-		userInfo.Notification = true
-		_, err = db.UpdateSetting(*userInfo)
+		setting.Notification = true
+		_, err = db.UpdateSetting(*setting)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		schedule.CreateNotificationsTasks(userInfo.ID, userInfo.Time)
+		schedule.CreateNotificationsTasks(setting.ID, setting.Time)
 		msg = fmt.Sprintln("Уведомления были включены")
 	}
-	message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, msg)
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Получать уведомления", CallbackData: &callBackWeatherNotifPush}},
-			{{Text: "Установить время", CallbackData: &callBackWeatherNotifTime}},
-			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-		},
-	}
-	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
-	}
+	markup := createSecondSettingKeyboard(setting)
+	return updateMessageBot(bot,
+		update.CallbackQuery.Message.Chat.ID,
+		update.CallbackQuery.Message.MessageID,
+		msg,
+		&markup,
+	)
 }
 
+//
 func isTimeSetting(update tgbotapi.Update) bool {
 	isTimeSetting := update.CallbackQuery != nil && update.CallbackQuery.Data == callBackWeatherNotifTime
 	return isTimeSetting
 }
-func handleTimeSetting(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+func handleTimeSetting(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	message := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Пожалуйста, отправьте мне время в формате XX:XX")
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-		},
-	}
+	message.ReplyMarkup = cancelKeyboard
 	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
 	awaitTime[update.CallbackQuery.From.ID] = true
+	return nil
 }
 
+//
 func isAwaitTime(update tgbotapi.Update) bool {
 	isAwaitTime := update.Message != nil && awaitTime[update.Message.From.ID] == true
 	return isAwaitTime
 }
-func handleAwaitTime(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
-
-	fineToCreateDB(update)
+func handleAwaitTime(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	userTime, err := time.Parse("15:04", update.Message.Text)
 	if err != nil {
-		log.Println(err, "не получилось")
 		message := tgbotapi.NewMessage(update.Message.Chat.ID, "Пожалуйста, отправьтьте время в формате\nXX:XX")
-		message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-			InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-				{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-			},
-		}
+		message.ReplyMarkup = cancelKeyboard
 		if _, err := bot.Send(message); err != nil {
-			log.Println(err)
+			return err
 		}
-		return
+		return nil
 	}
 
-	timeSet := fmt.Sprintln(userTime.Hour(), ":", userTime.Minute())
-	userSetting, err := db.GetSettingById(update.Message.From.ID)
+	timeSet := fmt.Sprintf("%d:%d", userTime.Minute(), userTime.Hour())
+	userSetting, err := findOrCreateSetting(update.Message.From.ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	userSetting.Time = timeSet
 	_, err = db.UpdateSetting(*userSetting)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	//Обнавление крон задачи если влючены уведомления
 	if userSetting.Notification {
 		schedule.CreateNotificationsTasks(userSetting.ID, userSetting.Time)
 	}
-
+	awaitTime[update.Message.From.ID] = false
 	msg := "Время задано"
 	message := tgbotapi.NewMessage(update.Message.Chat.ID, msg)
-	message.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-			{{Text: "Получать уведомления", CallbackData: &callBackWeatherNotifPush}},
-			{{Text: "Установить время", CallbackData: &callBackWeatherNotifTime}},
-			{{Text: "Отмена", CallbackData: &callBackWeatherMenu}},
-		},
-	}
+	message.ReplyMarkup = createSecondSettingKeyboard(userSetting)
 	if _, err := bot.Send(message); err != nil {
-		log.Println(err)
+		return err
 	}
-
-	awaitTime[update.Message.From.ID] = false
+	return nil
 }

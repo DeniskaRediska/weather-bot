@@ -4,13 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 )
 
 const OpenWeatherAPI = "23c6fd16f52d2bbd5edc293bfab7681a"
 
-type scheduleStruct struct {
+type ForecastResponse struct {
 	List []struct {
 		Main struct {
 			Temp float64
@@ -22,67 +21,68 @@ type scheduleStruct struct {
 	}
 }
 
-func WeatherAnswer(lat float64, lon float64) (string, float64, error) {
+func GetCurrentWeather(lat float64, lon float64) (string, float64, error) {
 	client := http.Client{}
-	WeatherApi := fmt.Sprint("http://api.openweathermap.org/data/2.5/weather?lat=", lat, "&lon=", lon, "&units=metric&APPID=", OpenWeatherAPI)
+	weatherApi := fmt.Sprint("http://api.openweathermap.org/data/2.5/weather?lat=", lat, "&lon=", lon, "&units=metric&APPID=", OpenWeatherAPI)
 
-	WeatherResponse, err := client.Get(WeatherApi)
+	weatherResponse, err := client.Get(weatherApi)
 	if err != nil {
 		//log.Println(err)
 		return "Не удалось считать данные", 0, err
 	}
+	defer weatherResponse.Body.Close()
 
-	DateWeather, err := ioutil.ReadAll(WeatherResponse.Body)
+	dateWeather, err := ioutil.ReadAll(weatherResponse.Body)
 	if err != nil {
-		log.Println(err)
+		return "", 0, err
 	}
 
-	type OWMResponse struct {
+	type oWMResponse struct {
 		Main struct {
 			Temp float64
 		}
 		Name string
 	}
-	var WeatherMessageGet OWMResponse
+	var weatherMessageGet oWMResponse
 
-	err = json.Unmarshal(DateWeather, &WeatherMessageGet)
+	err = json.Unmarshal(dateWeather, &weatherMessageGet)
 	if err != nil {
-		log.Println(err)
+		return "", 0, err
 	}
 
-	if WeatherMessageGet.Name == "" {
-		WeatherMessageGet.Name = "Unknown"
+	if weatherMessageGet.Name == "" {
+		weatherMessageGet.Name = "Unknown"
 	}
 
-	return WeatherMessageGet.Name, WeatherMessageGet.Main.Temp, nil
+	return weatherMessageGet.Name, weatherMessageGet.Main.Temp, nil
 }
 
-func WeatherScheule(lat float64, lon float64) (scheduleStruct, error) {
+func GetDailyForecast(lat float64, lon float64) (*ForecastResponse, error) {
 
 	client := http.Client{}
 
-	WeatherApi := fmt.Sprint("http://api.openweathermap.org/data/2.5/forecast?lat=", lat, "&lon=", lon, "&units=metric&APPID=", OpenWeatherAPI)
-	WeatherResponse, err := client.Get(WeatherApi)
+	weatherApi := fmt.Sprint("http://api.openweathermap.org/data/2.5/forecast?lat=", lat, "&lon=", lon, "&units=metric&APPID=", OpenWeatherAPI)
+	weatherResponse, err := client.Get(weatherApi)
 	if err != nil {
-		//log.Println(err)
-		return scheduleStruct{}, err
+		return nil, err
 	}
+	defer weatherResponse.Body.Close()
 
-	DateWeather, err := ioutil.ReadAll(WeatherResponse.Body)
+	dateWeather, err := ioutil.ReadAll(weatherResponse.Body)
 	if err != nil {
-		log.Println(err)
+		return nil, err
 	}
 
-	var WeatherMessageGet scheduleStruct
+	var weatherMessageGet ForecastResponse
 
-	err = json.Unmarshal(DateWeather, &WeatherMessageGet)
+	err = json.Unmarshal(dateWeather, &weatherMessageGet)
 	if err != nil {
-		log.Println(err)
+		return nil, err
 	}
 
-	if WeatherMessageGet.City.Name == "" {
-		WeatherMessageGet.City.Name = "Unknown"
+	if weatherMessageGet.City.Name == "" {
+		weatherMessageGet.City.Name = "Unknown"
 	}
 
-	return WeatherMessageGet, nil
+	return &weatherMessageGet, nil
 }

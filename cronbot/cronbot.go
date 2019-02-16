@@ -7,6 +7,7 @@ import (
 	"github.com/go-telegram-bot-api/telegram-bot-api"
 	"log"
 	"regexp"
+	"strings"
 )
 
 const TGAPI = "744595298:AAELmkW03wYJobHCkSePPHWcNqG6gEZVlSc"
@@ -21,10 +22,11 @@ func AutoPush(idUser int) {
 
 	bot, err := tgbotapi.NewBotAPI(TGAPI)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 
-	temp, err := openweather.WeatherScheule(userInfo.Lat, userInfo.Lon)
+	temp, err := openweather.GetDailyForecast(userInfo.Lat, userInfo.Lon)
 	if err != nil {
 		log.Println(err)
 		return
@@ -34,18 +36,20 @@ func AutoPush(idUser int) {
 	if err != nil {
 		log.Println(err)
 	}
+
+	array := make([]string, len(temp.List))
+	for i := range temp.List {
+		array[i] = fmt.Sprintln("В ", try.FindString(temp.List[i].Dt_txt), " будет ", temp.List[i].Main.Temp, " градусов")
+	}
+
 	msg := fmt.Sprintln(
-		"Погода на день для города ", temp.City.Name, ":",
-		"\n В ", try.FindString(temp.List[0].Dt_txt), " будет ", temp.List[0].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[1].Dt_txt), " будет ", temp.List[1].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[2].Dt_txt), " будет ", temp.List[2].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[3].Dt_txt), " будет ", temp.List[3].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[4].Dt_txt), " будет ", temp.List[4].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[5].Dt_txt), " будет ", temp.List[5].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[6].Dt_txt), " будет ", temp.List[6].Main.Temp, " градусов",
-		"\n В ", try.FindString(temp.List[7].Dt_txt), " будет ", temp.List[7].Main.Temp, " градусов",
+		"Погода на день для города ", temp.City.Name, ":\n",
+		strings.Join(array, "\n"),
 		"\nЕсли хотите отключить уведомления или изменить локацию, зайдите в меню через команду /start",
 	)
 	message := tgbotapi.NewMessage(int64(userInfo.ID), msg)
-	bot.Send(message)
+	_, err = bot.Send(message)
+	if err != nil {
+		return
+	}
 }
